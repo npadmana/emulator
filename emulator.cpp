@@ -12,19 +12,19 @@ using namespace std;
 
 emulator::emulator()
 {
-	ysim.resize(10,10);
-	design.resize(10,10);
-	otherysim.resize(10,10);
-	otherdesign.resize(10,10);
-	Ksim.resize(10,10);
-	K.resize(10,10);
-	invKtrK.resize(10,10);
-	ypred.resize(10,10);
-	designpred.resize(10,10);
-	xvar.resize(10);
-	eta.resize(10);
-	what.resize(10);	
-	ysimmean.resize(10);
+	ysim.resize(0,0);
+	design.resize(0,0);
+	otherysim.resize(0,0);
+	otherdesign.resize(0,0);
+	Ksim.resize(0,0);
+	K.resize(0,0);
+	invKtrK.resize(0,0);
+	ypred.resize(0,0);
+	designpred.resize(0,0);
+	xvar.resize(0);
+	eta.resize(0);
+	what.resize(0);	
+	ysimmean.resize(0);
 	ysimsd = 0.0;
 	nsims = 0;
 	numPC = 0;
@@ -32,6 +32,54 @@ emulator::emulator()
 	ntheta = 0;
 	truepoint = 0;
 }
+
+// Simple function to generate fake simulator response. 
+void emulator::gensim(int test)
+{
+	// one parameter design: cos(x) + theta^2
+	if(test == 1)
+	{
+		int i, j;
+		
+		ntheta = 1;
+		float thetamin = 0.0;
+		float thetamax = 1.0;
+		float dtheta = 0.1;
+		nsims = (thetamax - thetamin)/dtheta + 1;
+		design.resize(nsims,ntheta);
+		design(0,0) = thetamin;
+		for (i = 1; i < nsims; i++)
+		{
+			design(i,0) = design(i-1,0) + dtheta;
+		}
+		
+		float xmin = 0.0;
+		float xmax = 2.0;
+		float dx = 0.1;
+		noutput = (xmax - xmin) / dx + 1;
+		xvar.resize(noutput);
+		xvar(0) = xmin;
+		for (i = 1; i < noutput; i++)
+		{
+			xvar(i) = xvar(i-1) + dx;
+		}
+		
+		ysim.resize(noutput, nsims);
+		
+		for (int i = 0; i < noutput; i++)
+		{
+			for(int j = 0; j < nsims; j++)
+			{
+				ysim(i,j) = cos(xvar(i)) + pow(design(j,0),2);
+			}
+		}
+	}
+	
+	cout << "design is: \n" << design << endl;
+	cout << "xvar is: \n" << xvar << endl;
+	cout << "ysim is: \n" << ysim << endl;
+ 
+}	
 
 void emulator::readin(char* filename1, char* filename2, char* filename3)
 {
@@ -277,7 +325,6 @@ void emulator::GPsetup(int num_PC)
 	
 	// cout << "\nThis is ysim standardized: " << endl << ysimStd << endl;
 	// cout << "\nThis is design standardized: " << endl << design_std << endl;
-	
 	Ksim.resize(nsims,numPC);
 	
 	//	Find principal component representation
@@ -548,27 +595,10 @@ void emulator::setupdesignpred(int numreal)
 {
 	ypred.resize(noutput, numreal);
 	ypred.setZero();
-	MatrixXd display(otherdesign.rows(), otherdesign.cols() + 1);
-	int i;
-	for (i = 0; i < otherdesign.rows(); i++)
-	{
-		display(i,0) = i + 1;
-	}
-	display.block(0,1, otherdesign.rows(), otherdesign.cols()) = otherdesign;
-	cout << "\nSimulation design for validation data (runs not included in training set): \n" << display << endl;
-	cout << "Please select from the above the parameter setting you'd like "; 
-	cout << "to use for the prediction by typing the corresponding number in the leftmost column. ";
-	cout << "OR type 0 if you would like to use a new set of parameters not included in the list above.\n";
-	cin >> truepoint;
+	int i;	
+	RowVectorXd thetapred(ntheta);	
 	
-	while (truepoint < 0 || truepoint > otherdesign.rows())
-	{
- 		cout << "The choice you selected is invalid. Please select again." << endl;
-		cin >> truepoint;
-	}
-	
-	RowVectorXd thetapred(ntheta);
-	if(truepoint == 0)
+	if(otherdesign.rows() == 0 && otherdesign.cols() == 0)
 	{
 		cout << "\nPlease type the parameter settings you'd like to use, pressing 'SPACE' after each number.\n";
 		for (i = 0; i < ntheta; i++)
@@ -579,14 +609,47 @@ void emulator::setupdesignpred(int numreal)
 		truepoint--;
 	}
 	
-	if (truepoint > 0)
+	else
 	{
-		truepoint--;
-		thetapred = otherdesign.row(truepoint);
+		MatrixXd display(otherdesign.rows(), otherdesign.cols() + 1);
+
+		for (i = 0; i < otherdesign.rows(); i++)
+		{
+			display(i,0) = i + 1;
+		}
+		display.block(0,1, otherdesign.rows(), otherdesign.cols()) = otherdesign;
+		cout << "\nSimulation design for validation data (runs not included in training set): \n" << display << endl;
+		cout << "Please select from the above the parameter setting you'd like "; 
+		cout << "to use for the prediction by typing the corresponding number in the leftmost column. ";
+		cout << "OR type 0 if you would like to use a new set of parameters not included in the list above.\n";
+		cin >> truepoint;
 	
-		cout << endl << "You chose the setting: " << thetapred << endl;
-		cout << "\nThis parameter setting corresponds to the actual simulation output:\n" << otherysim.col(truepoint) << endl;
-	}
+		while (truepoint < 0 || truepoint > otherdesign.rows())
+		{
+			cout << "The choice you selected is invalid. Please select again." << endl;
+			cin >> truepoint;
+		}
+	
+		if (truepoint > 0)
+		{
+			truepoint--;
+			thetapred = otherdesign.row(truepoint);
+	
+			cout << endl << "You chose the setting: " << thetapred << endl;
+			cout << "\nThis parameter setting corresponds to the actual simulation output:\n" << otherysim.col(truepoint) << endl;
+		}
+	
+		if(truepoint == 0)
+		{
+			cout << "\nPlease type the parameter settings you'd like to use, pressing 'SPACE' after each number.\n";
+			for (i = 0; i < ntheta; i++)
+			{
+				cin >> thetapred(i);
+			}
+			cout << "Emulator will make prediction for input settings: " << thetapred << endl;
+			truepoint--;
+		}
+	}	
 	
 	/**** standardize the prediction points ****/
 	RowVectorXd thetapred_std(ntheta);
@@ -692,7 +755,7 @@ void emulator::savepred()
 	myfile.open (filename);	
 	
 	// Store all data in file
-	myfile << "#xvar\t" << "#ysim mean\t" << "#stddev\t" << "#actual output\t" << "#pred output\n";		// column headings
+	myfile << "#xvar\t" << "#ysim mean\t" << "#stddev\t" << "#pred output\n" << "#actual output\t";		// column headings
 	for (i = 0; i < ypred.rows(); i++)
 	{
 		j = 0;
@@ -705,7 +768,7 @@ void emulator::savepred()
 				myfile << "\t" << ypred(i,j);
 			}
 		}
-		if(truepoint >= 0)
+		if(otherdesign.rows() != 0)
 		{
 			myfile << "\t" << otherysim(i,truepoint);
 		}

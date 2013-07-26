@@ -16,29 +16,46 @@ using namespace std;
 int main()
 {
 	char sim_out[255], sim_in[255], x_var[255];
-	int discard, num_PC, iter;
+	int discard, num_PC, iter, simtype;
 	emulator data;
 	GPdat GPfit;
 	GPdat GPpred;
 
-	cout << "\nType file name for simulation output.\nFile format: \n";
-	cout << "First two numbers specify row, column size. Then the matrix is output of each simulation x number of simulations.\n";
-    cin >> sim_out;
-    cout << "\nType file name for simulation design (# of simulations x # of paramaters).\n";
-    cout << "Again, first two numbers specify row and column size.\n";
-    cin >> sim_in;
-    cout << "\nType file name for independent variable array. \nFirst number specifies length of array.\n";
-    cin >> x_var;
-    
-    //	Read above files into ysim, design, and xvar
-    data.readin(sim_out, sim_in, x_var);
-    
-    
-    cout << "Number of simulation runs to ignore: \n";
-    cin >> discard;
+	cout << endl << "Read sim data from file or generate simulation? (Read = 0, generate = 1)" << endl;
+	cin >> simtype;
+	
+	if (simtype == 0)
+	{
+		cout << "\nType file name for simulation output.\nFile format: \n";
+		cout << "First two numbers specify row, column size. Then the matrix is output of each simulation x number of simulations.\n";
+		cin >> sim_out;
+		cout << "\nType file name for simulation design (# of simulations x # of paramaters).\n";
+		cout << "Again, first two numbers specify row and column size.\n";
+		cin >> sim_in;
+		cout << "\nType file name for independent variable array. \nFirst number specifies length of array.\n";
+		cin >> x_var;
+	
+		//	Read above files into ysim, design, and xvar
+		data.readin(sim_out, sim_in, x_var);
+	
+	
+	
+		cout << "Number of simulation runs to ignore: \n";
+		cin >> discard;
 
-    data.setup(discard);
+		data.setup(discard);
+    }
     
+    if (simtype == 1)
+    {
+    	int simchoice;
+    	cout << "Please type the number corresponding to the simulation you'd like to use." << endl;
+    	cout << "\t1. cos(x) + theta^2" << endl << "\t2. ????" << endl << "\t3. ????" << endl << endl;
+    	cin >> simchoice;
+    	data.gensim(simchoice);
+    }
+    
+
     cout << "Number of principal components: \n";
     cin >> num_PC;
 

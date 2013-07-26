@@ -41,6 +41,7 @@ class emulator
 		
 	public:
 		emulator(); 	// constructor
+		void gensim(int);	// Simple function to generate fake simulator response. 
    		void readin(char*, char*, char*);    // read in ysim, design, and xvar from three files
 		void setup(int);	// Randomly separates sims into ysim and otherysim. Takes 'discard' as an argument = the # of sims to ignore.
 		void GPsetup(int);		// Sets up K, invKtrK matrices and eta for fitGP and predGP
