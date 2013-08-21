@@ -1,209 +1,63 @@
-// Interactive version for small tests of the emulator.
-
-
+#include "GPemulator.h"
 #include <iostream>
 #include <fstream>
 #include <stdlib.h>
-#include <math.h>
-#include "Eigen/Dense"
+#include <Eigen/Dense>
 #include <ctime>	// for clock
-#include <cstdlib> // for rand() and srand()
-// #include <random> 	//uncomment if using getRandnum()
-
-using namespace Eigen;
-using namespace std;
-
-//#define NDEBUG  
-
-struct GPdat 
-{
-    VectorXd lam_eta;
-    MatrixXd lambdas;
-    MatrixXd rhos;
-};
-
-MatrixXd SortByCol(MatrixXd);
-MatrixXd SortByRow(MatrixXd);
-float unifrnd(float, float);
-MatrixXd invert(MatrixXd);
-//float getRandnum(default_random_engine, float, float);
-
-
-class emulator
-{
-	private:
-		MatrixXd ysim, design, otherysim, otherdesign, designpred, ypred;
-		MatrixXd Ksim, K, invKtrK;
-		VectorXd xvar;
-		VectorXd eta;
-		VectorXd what;
-		VectorXd ysimmean;
-		float ysimsd;
-		int nsims;
-		int numPC;
-		int noutput;
-		int ntheta;
-		int truepoint;
-		MatrixXd std_design();	// Scale the design matrix
-		MatrixXd std_ysim();		// Standardize the simulations
-		MatrixXd makeRmat(MatrixXd, RowVectorXd);		// builds R matrix
-		MatrixXd makesigmaw(MatrixXd, RowVectorXd, RowVectorXd);	// function to build sigmaw covariance matrix
-		
-	public:
-		emulator(); 	// constructor
-   		void readin(char*, char*, char*);    // read in ysim, design, and xvar
-		void setup(int);	// Randomly separates simulations into ysim and otherysim. Takes 'discard' as an argument.
-		void GPsetup(int);		// Sets up K, invKtrK matrices and eta for fitGP and predGP
-		GPdat fitGP(int); 	// fits the GP to training set
-		void setupdesignpred(int);		// Choose prediction parameters and set up ypred		
-		void predGP(GPdat, int); // make prediction. this function calculates the ypred matrix
-		void savepred();	// save ypred to file formatted for plotting
-};
-
+#include <iomanip> // for setprecision (when saving file)
 
 emulator::emulator()
 {
-	ysim.resize(10,10);
-	design.resize(10,10);
-	otherysim.resize(10,10);
-	otherdesign.resize(10,10);
-	Ksim.resize(10,10);
-	K.resize(10,10);
-	invKtrK.resize(10,10);
-	ypred.resize(10,10);
-	designpred.resize(10,10);
-	xvar.resize(10);
-	eta.resize(10);
-	what.resize(10);	
-	ysimmean.resize(10);
+	ysim.resize(0,0);
+	design.resize(0,0);
+	ysimValidation.resize(0,0);
+	designValidation.resize(0,0);
+	Ksim.resize(0,0);
+	K.resize(0,0);
+	invKtrK.resize(0,0);
+	ypred.resize(0,0);
+	designpred.resize(0,0);
+	eta.resize(0);
+	what.resize(0);	
+	ysimmean.resize(0);
 	ysimsd = 0.0;
 	nsims = 0;
 	numPC = 0;
 	noutput = 0;
 	ntheta = 0;
-	truepoint = 0;
 }
 
-void emulator::readin(char* filename1, char* filename2, char* filename3)
+//	Sets ysim, design, ntheta, noutput, and nsims
+void emulator::initialize(MatrixXd ysimMat, MatrixXd designMat)
 {
-	int sims;
+	ysim = ysimMat;
+	design = designMat;
 	
-	// first read in x-var data
-	ifstream x_var;
-    x_var.open(filename3);
-    
-    if(x_var.fail()) 
-    {
-		cout << "Can't open file: " << filename3 << endl;
-		exit(1);
-    }
-    
-    // first number in file is size of output
-    x_var >> noutput;
-    xvar.resize(noutput);
-    //	Read in from file
-	int i;
-	float x;
-	for(i = 0; i < noutput; i++)
-	{
-		x_var >> x;
-		xvar(i) = x;
-	}
-	x_var.close();
-
-	cout << "\nX variable array size is: " << xvar.size() << endl;
-	cout << "X variable array is:\n" << xvar << endl;
-	
-	// now read in simulation output
-	ifstream sim_out;
-	sim_out.open(filename1);
-	
-	if(sim_out.fail())
-	{
-		cout << "Can't open file: " << filename1 << endl;
-		exit(1);	
-	}
-	
-	// number of rows = size of output, number of columns = number of simulations
-	sim_out >> noutput >> sims;
-	
-	ysim.resize(noutput, sims);
-	int j;
-	for (i = 0; i < noutput; i++)
-	{
-		for (j = 0; j < sims; j++)
-		{
-			sim_out >> x;
-			ysim(i,j) = x;
-		}	
-	}
-	sim_out.close();
-	
-	cout << "\nysim matrix (format: output of simulations x number of simulations)\n" << ysim << endl;
-	
-	// now read in simulation design
-	ifstream sim_in;
-	sim_in.open(filename2);
-	
-	if(sim_in.fail())
-	{
-		cout << "Can't open file: " << filename2 << endl;
-		exit(1);
-	}
-	
-	// number of rows = number of simulations, number of cols = number of parameters
-	sim_in >> sims >> ntheta;
-	design.resize(sims, ntheta);
-	for (i = 0; i < sims; i++)
-	{
-		for (j = 0; j < ntheta; j++)
-		{
-			sim_in >> x;
-			design(i,j) = x;
-		}
-	}
-	sim_in.close();
-	
-	cout << "\nDesign matrix is:\n" << design << endl;
-	cout << "\nTotal number of simulations is: " << ysim.cols() << endl;
-	cout << "Number of parameters is: " << design.cols() << endl;
+	ntheta = design.cols();
+	noutput = ysim.rows();
+	nsims = ysim.cols();
 }
 
-//	Sets ysim, design (the training set), and otherysim and otherdesign
-void emulator::setup(int discard)
+// 	Discard the first "ignore" simulation runs specified by the user
+void emulator::discardsims(int ignore)
 {
-	// 	Ignore the first "discard" simulations
-	ysim = ysim.rightCols(ysim.cols() - discard);
-	design = design.bottomRows(design.rows() - discard);
+	ysim = ysim.rightCols(ysim.cols() - ignore);
+	design = design.bottomRows(design.rows() - ignore);
 	
-	// cout << "\nysim matrix minus discarded columns is: \n" << ysim << endl;
-	// cout << "\nDesign matrix minus discarded rows is:\n" << design << endl;
-	cout << endl << ysim.cols() << " simulations remain." << endl;
+	nsims = ysim.cols();
+	
+	cout << endl << nsims << " simulations remain." << endl;
+}
 
-	int ans = 0;
-	cout << endl << "Multiply sim output by r^2? (No = 0; Yes = 1)" << endl;
-	cin >> ans;
-	
-	if (ans == 1)
-	{
-		int j;
-		for (j = 0; j < ysim.cols(); j++)
-		{
-			ysim.col(j) = ysim.col(j).array() * xvar.array().pow(2);
-		}
-		cout << "check!" << endl;
-	}
-	
-	ans = 0;
-	cout << endl << "Take log of x and sim output? (No = 0; Yes = 1)" << endl;
-	cin >> ans;
-	if (ans == 1)
-	{
-		ysim = ysim.array().log();
-		xvar = xvar.array().log();
-		cout << "check!";
-	}
+//	Takes log of simulator output (ysim)
+void emulator::takelog()
+{
+	ysim = ysim.array().log();
+}
 
+//	Sets up ysim, design (the training set), and ysimValidation and designValidation
+void emulator::setup(int sims)
+{		
 	int total_sim = ysim.cols();
 	ifstream randnum;
 	VectorXd sortvec;
@@ -219,8 +73,6 @@ void emulator::setup(int discard)
 	}
 	randnum.close();
 	
-	// cout << "\nSorting vector is: \n" << sortvec << endl;
-	
 	//	Append sortvec to the last row of ysim and the last column of design
 	ysim.conservativeResize(ysim.rows()+1, NoChange);
 	design.conservativeResize(NoChange, design.cols()+1);
@@ -235,23 +87,19 @@ void emulator::setup(int discard)
 	//	Delete sortvec from matrices
 	ysim.conservativeResize(ysim.rows()-1, NoChange);
 	design.conservativeResize(NoChange, design.cols()-1);
+
+	//	reset nsims
+	nsims = sims;
 	
-	//	Separate training set
-	cout << "\nHow many simulations do you want to feed to the emulator? (size of training set)\n";
-	cin >> nsims;	
-	
-	otherysim = ysim.rightCols(ysim.cols() - nsims);
+	//	Separate data into training set and validation set	
+	ysimValidation = ysim.rightCols(ysim.cols() - nsims);
 	ysim = ysim.leftCols(nsims);
 
-	otherdesign = design.bottomRows(design.rows() - nsims);
+	designValidation = design.bottomRows(design.rows() - nsims);
 	design = design.topRows(nsims);	
-	
-	// cout << "\nYsim is: \n" << ysim << endl;
-	// cout << "\notherysim is \n" << otherysim << endl;
-	// cout << "\ndesign is: \n" << design << endl;
-	// cout << "\notherdesign is: \n" << otherdesign << endl;	
 }
 
+// standardize the design matrix
 MatrixXd emulator::std_design()
 {
 	MatrixXd newmat(nsims,ntheta);
@@ -275,14 +123,7 @@ MatrixXd emulator::std_design()
 	return newmat;
 }
 
-/* 
-Matlab code to standardize ysim
-ysimmean = mean(ysim,2);
-ysim0 = ysim - repmat(ysimmean,[1 nsims]);
-ysimsd = sqrt(var(ysim0(:)));
-ysimStd = ysim0./ysimsd;
-display(ysimStd) 
-*/
+// standardize sims
 MatrixXd emulator::std_ysim()
 {
 	MatrixXd ysim0(noutput, nsims);
@@ -301,7 +142,7 @@ MatrixXd emulator::std_ysim()
 		ysim0.col(j) = ysim.col(j) - ysimmean;
 	}
 
-	//	Calculate the variance over entire matrix.
+	//	Calculate the variance over entire ysim0 matrix.
 	float mean = ysim0.mean();
 	for (i = 0; i < noutput; i++)
 	{
@@ -320,23 +161,20 @@ MatrixXd emulator::std_ysim()
 // function to set up K matrix
 void emulator::GPsetup(int num_PC)
 {
+	numPC = num_PC;	
+	
 	MatrixXd design_std(nsims, ntheta);
 	MatrixXd ysimStd(noutput, nsims);
-
-	numPC = num_PC;
+	
 	//	Scale the design matrix and standardize ysim
 	design_std = std_design();
 	ysimStd = std_ysim();
-	
-	// cout << "\nThis is ysim standardized: " << endl << ysimStd << endl;
-	// cout << "\nThis is design standardized: " << endl << design_std << endl;
 	
 	Ksim.resize(nsims,numPC);
 	
 	//	Find principal component representation
 	JacobiSVD<MatrixXd> svd(ysimStd, ComputeThinU | ComputeThinV);
 	Ksim.noalias() = (1/sqrt(nsims)) * svd.matrixU().leftCols(numPC) * (svd.singularValues().head(numPC).asDiagonal());
-	// cout << "\nThis is Ksim: " << endl << Ksim << endl;
 	
 	//	Create overall K matrix with tensor (Kronecker) products
 	K.resize(nsims*Ksim.rows(), nsims*numPC);
@@ -350,8 +188,7 @@ void emulator::GPsetup(int num_PC)
 			ksim.segment(Ksim.rows()*j,Ksim.rows()) = Ksim.col(i);
 			K.col(nsims*i + j) = ksim;
 		}
-	}
-	// cout << "\nK matrix is: " << endl << K << endl;	
+	}	
 		
 	//	Define eta (stack up sims--stack columns of matrix into a vector)
 	eta.resize(noutput * nsims);
@@ -360,19 +197,13 @@ void emulator::GPsetup(int num_PC)
 		eta.segment(i * noutput, noutput) = ysimStd.col(i);
 	}
 	
-	// cout << "eta vector is: " << endl << eta << endl;
-	
 	//	Find inverse (K' * K) = invKtrK
-	//MatrixXd KtrK(10,10);
 	invKtrK.noalias() = K.transpose() * K;
 	invKtrK = invKtrK.inverse();
 	
-	// cout << "invKtrK matrix is: " << endl << invKtrK << endl;
-
 	//	Define 'what' vector
 	what.resize(invKtrK.rows());
-	what.noalias() = invKtrK * K.transpose() * eta;
-	// cout << "This is the 'what' vector: \n" << what << endl;		
+	what.noalias() = invKtrK * K.transpose() * eta;	
 }
 
 // function to build R matrix
@@ -395,7 +226,7 @@ MatrixXd emulator::makeRmat(MatrixXd design_std, RowVectorXd rhos)
 			factor = 1.0;
 			for (p = 0; p < ntheta; p++)
 			{
-				factor = factor * pow(rhos(p),4*pow(design_std(k,p) - design_std(l,p),2));
+				factor = factor * pow(rhos(p),4*pow(design_std(k,p) - design_std(l,p),2)); // correlation function
 			}
 			Rmat(k,l) = factor;
 		}
@@ -434,17 +265,13 @@ MatrixXd emulator::makesigmaw(MatrixXd design_std, RowVectorXd lamw, RowVectorXd
 	return sigmaw;
 }
 
-GPdat emulator::fitGP(int niter)
+GPdat emulator::fitGP(int niter, float b_eta = 0.0001, float a_eta = 1, int bw = 10, int aw = 10, float brho = 0.1, int seed = 43)
 {
 	GPdat fitGPout;
-	//default_random_engine rd(2094);		// uncomment if using getRandnum
 	MatrixXd design_std(nsims, ntheta);
 	design_std = std_design();
 	
 	int neta_tot = noutput * nsims;
-	
-	float a_eta = 1;
-	float b_eta = 0.001;
 	
 	float a_eta_p = a_eta + nsims * (float)(noutput - numPC) / 2;
 	
@@ -454,20 +281,14 @@ GPdat emulator::fitGP(int niter)
 	tmpvec.noalias() = K.transpose() * eta;
 	
 	float b_eta_p = b_eta + 0.5 * (eta.squaredNorm() - tmpvec.dot(invKtrK * tmpvec));
-	// cout << "b_eta_p is: \n" << b_eta_p << endl;
-	
-	int aw = 10;
-	int bw = 10;
-	float brho = 0.1;
-	
-	
+
 	/******* SET UP MCMC *************************/
+	cout << endl << "Starting MCMC for fitGP..." << endl << endl;	
+	
 	RowVectorXd mux(1 + numPC + numPC * ntheta);
 	mux(0) = 10000;				// lambda_eta, the overall precision parameter
 	mux.segment(1,numPC).setOnes();		// lamw, initialize precision params
 	mux.segment(numPC+1, numPC * ntheta).setConstant(0.5);	// rhow, initialize correlation params
-	
-	// cout << "mux is: \n" << mux << endl;
 	
 	int nk = mux.size();
 	
@@ -482,7 +303,6 @@ GPdat emulator::fitGP(int niter)
 	r(0) = 100;
 	r.segment(1,numPC).setConstant(0.1);
 	r.segment(numPC + 1, numPC * ntheta).setConstant(0.1);
-	// cout << "This is r: \n" << r << endl;
 	
 	MatrixXd sample(niter, nk);		// dimension sample array
 	sample.setZero();
@@ -498,38 +318,27 @@ GPdat emulator::fitGP(int niter)
 	RowVectorXd rhowold(numPC * ntheta);
 	MatrixXd sigtotnew(nsims * numPC, nsims * numPC);
 	MatrixXd sigtotold(nsims * numPC, nsims * numPC);
-	srand(43);
+	srand(seed);
 	float logrand;
+	time_t t1, t2, T1, T2;
+	T1 = clock(); 	// start timer for entire MCMC
 	for(count = 0; count < niter; count++)
 	{
-		time_t t1 = clock(); // start timer
+		t1 = clock(); // start timer for one iteration of MCMC
 		for(component = 0; component < nk; component++)
 		{
 			dmux.setZero();
 			dux = unifrnd(-r(component), r(component));		// generate a proposal
-			// cout << "dux is: " << dux << endl;
 			dmux(component) = dux;
 			trial.noalias() = mux + dmux;
 			proposals++;
 
 			/***** computation of log likelihood *******/
 			reject = 1; 	// flag to reject trial, default to reject until checks made
-			// cout << "Trial is: \n" << trial << endl;
 			if (trial(0) >= 0 && (trial.segment(1, numPC).array() > 0).all() && (trial.segment(numPC + 1, numPC * ntheta).array() > 0).all() && (trial.segment(numPC + 1, numPC * ntheta).array() < 1).all())
 			{
-// 				if((trial.segment(1, numPC).array() > 0).all())		// lamw check
-// 				{
-// 					if((trial.segment(numPC + 1, numPC * ntheta).array() > 0).all())
-// 					{
-// 						if((trial.segment(numPC + 1, numPC * ntheta).array() < 1).all())	// rhow check
-// 						{
-// 							reject = 0;
-// 						}
-// 					}
-// 				}
 				reject = 0;
 			}
-			// cout << "reject is: " << reject << endl;
 		
 			if(reject == 0)
 			{	
@@ -569,7 +378,6 @@ GPdat emulator::fitGP(int niter)
 							-lamwfacold \
 							+rhofacnew \
 							-rhofacold;
-				// cout << "log ratio is: " << logratio << endl;
 				logrand = log(unifrnd(0.0,1.0)+eps);
 				if (logratio >= logrand)
 				{
@@ -579,20 +387,22 @@ GPdat emulator::fitGP(int niter)
 			}		
 		}
 		
+		// recall nk = (1 + numPC + numPC * ntheta) = sample.rows() = mux.size()		
 		sample.row(count) = mux;
-		time_t t2 = clock();
-		cout << "Time elapsed: " << (double)(t2 - t1) / (double) CLOCKS_PER_SEC << endl;
+		t2 = clock(); 	// end timer
+		cout << "Iteration " << count + 1 << ": " << (double)(t2 - t1) / (double) CLOCKS_PER_SEC << " seconds elapsed." << endl;
 	}
 	
-	// cout << "proposals is: " << proposals << endl;
-	//	recall nk = (1 + numPC + numPC * ntheta) = sample.rows() = mux.size()
+	T2 = clock();	// end timer
+	
 	fitGPout.lam_eta.resize(niter);
 	fitGPout.lambdas.resize(niter, numPC);
 	fitGPout.rhos.resize(niter, numPC * ntheta);
 	
 	/***** end loop control *****/
-	// float acceptance_rate = (float) accept / proposals;
-	// cout << "Acceptance rate is: " << acceptance_rate << endl;
+	float acceptance_rate = (float) accept / proposals;
+	cout << endl << "Acceptance rate is: " << acceptance_rate << endl;
+	cout << endl << "Total MCMC took " << (double)(T2 - T1) / (double) CLOCKS_PER_SEC << " seconds to complete." << endl;
 		
 	fitGPout.lam_eta = sample.col(0);
 	fitGPout.lambdas.noalias() = sample.block(0,1,niter,numPC);
@@ -601,49 +411,218 @@ GPdat emulator::fitGP(int niter)
 	return fitGPout;
 }
 
-void emulator::setupdesignpred(int numreal)
+// saves all fit information needed to make prediction to file. Read in this file using ReadFitData function
+void emulator::savefit(GPdat GPfit, char* filename)
+{
+	ofstream myfile;
+	int i,j;
+
+	myfile.open (filename);	
+	
+	// Store all data in file
+	myfile << "#This file will only be used by function emulator::ReadFItData. ";
+	myfile << "It contains all information necessary to run the prediction separately from the fit program." << endl;
+	
+	// Save lam_eta
+	myfile << "#lam_eta" << endl;
+	myfile << GPfit.lam_eta.size() << endl;;
+	for (i = 0; i < GPfit.lam_eta.size(); i++)
+	{
+		myfile << scientific << setprecision(30) << GPfit.lam_eta(i) << endl;
+	}
+	
+	// Save lambdas
+	myfile << "#lambdas" << endl;
+	myfile << GPfit.lambdas.rows() << " " << GPfit.lambdas.cols() << endl;
+	for (i = 0; i < GPfit.lambdas.rows(); i++)
+	{
+		for (j = 0; j < GPfit.lambdas.cols(); j++)
+		{
+			myfile << GPfit.lambdas(i,j) << " ";
+		}
+		myfile << endl;	
+	}
+	
+	// Save rhos
+	myfile << "#rhos" << endl;
+	myfile << GPfit.rhos.rows() << " " << GPfit.rhos.cols() << endl;
+	for (i = 0; i < GPfit.rhos.rows(); i++)
+	{
+		for (j = 0; j < GPfit.rhos.cols(); j++)
+		{
+			myfile << GPfit.rhos(i,j) << " ";
+		}
+		myfile << endl;	
+	}
+	
+	// Save ysim -- simulations in training set.
+	myfile << "#ysim" << endl;
+	myfile << ysim.rows() << " " << ysim.cols() << endl;
+	for (i = 0; i < ysim.rows(); i++)
+	{
+		for (j = 0; j < ysim.cols(); j++)
+		{
+			myfile << ysim(i,j) << " ";
+		}
+		myfile << endl;
+	}
+	
+	// Save design -- simulation design for the training set
+	myfile << "#design" << endl;
+	myfile << design.rows() << " " << design.cols() << endl;
+	for (i = 0; i < design.rows(); i++)
+	{
+		for (j = 0; j < design.cols(); j++)
+		{
+			myfile << design(i,j) << " ";
+		}
+		myfile << endl;
+	}
+	
+	myfile.close();
+}
+
+// If a validation set exists, save it
+void emulator::SaveValidationData(char* otherysim, char* otherdesign)
+{
+	if (designValidation.rows() == 0 || ysimValidation.cols() == 0)
+	{
+		cout << endl << "Sorry, the validation set is empty so there is no information to save to file." << endl;
+	}
+	
+	else
+	{
+		int i,j;
+		ofstream ysimfile;
+		ysimfile.open(otherysim);
+		// Save ysimValidation -- simulations in the validation set
+		ysimfile << "#Validation set simulator output" << endl;
+		ysimfile << ysimValidation.rows() << " " << ysimValidation.cols() << endl;
+		for (i = 0; i < ysimValidation.rows(); i++)
+		{
+			for (j = 0; j < ysimValidation.cols(); j++)
+			{
+				ysimfile << scientific << setprecision(30) << ysimValidation(i,j) << " ";
+			}
+			ysimfile << endl;
+		}
+		ysimfile.close();
+	
+		ofstream designfile;
+		designfile.open(otherdesign);
+	
+		// Save designValidation -- simulation design for the validation set
+		designfile << "#Validation set input parameter design" << endl;
+		designfile << designValidation.rows() << " " << designValidation.cols() << endl;
+		for (i = 0; i < designValidation.rows(); i++)
+		{
+			for (j = 0; j < designValidation.cols(); j++)
+			{
+				designfile << scientific << setprecision(30) << designValidation(i,j) << " ";
+			}
+			designfile << endl;
+		}
+		designfile.close();
+	}
+}
+
+// Reads in data contained in file produced by savefit function
+GPdat emulator::ReadFitData(char* filename)
+{
+	GPdat GPpred;
+	int nrows, ncols;
+	
+	ifstream fitfile;
+	fitfile.open(filename);
+	
+	if(fitfile.fail())
+	{
+		cout << endl << "Can't open file: " << filename << endl;
+		exit(1);	
+	}
+	
+    string line;
+    int i, j;
+    
+    getline(fitfile, line);		// don't read commented line
+    getline(fitfile, line);		// don't read commented line
+    
+    // Read in lam_eta
+    fitfile >> nrows;
+ 	GPpred.lam_eta.resize(nrows);
+    for (i = 0; i < nrows; i++)
+    {
+    	fitfile >> GPpred.lam_eta(i);	
+    }
+	getline(fitfile, line);    // Move to next line
+    
+    // Read in lambdas
+	getline(fitfile, line);    // don't read commented line   
+	fitfile >> nrows >> ncols;
+	GPpred.lambdas.resize(nrows, ncols);
+	for (i = 0; i < nrows; i++)
+	{
+		for (j = 0; j < ncols; j++)
+		{
+			fitfile >> GPpred.lambdas(i,j);
+		}
+	}
+	getline(fitfile, line);    // move to next line	
+    
+    // Read in rhos
+	getline(fitfile, line);    // don't read commented line       
+	fitfile >> nrows >> ncols;
+	GPpred.rhos.resize(nrows, ncols);
+	for (i = 0; i < nrows; i++)
+	{
+		for (j = 0; j < ncols; j++)
+		{
+			fitfile >> GPpred.rhos(i,j);
+		}
+	}
+	getline(fitfile, line);    // move to next line 
+    
+    // Read in ysim
+	getline(fitfile, line);    // don't read commented line       
+	fitfile >> nrows >> ncols;
+	ysim.resize(nrows, ncols);
+	for (i = 0; i < nrows; i++)
+	{
+		for (j = 0; j < ncols; j++)
+		{
+			fitfile >> ysim(i,j);
+		}
+	}
+	getline(fitfile, line);    // move to next line		
+    
+    // Read in design
+	getline(fitfile, line);    // don't read commented line   
+	fitfile >> nrows >> ncols;
+	design.resize(nrows, ncols);
+	for (i = 0; i < nrows; i++)
+	{
+		for (j = 0; j < ncols; j++)
+		{
+			fitfile >> design(i,j);
+		}
+	}
+    
+    fitfile.close();
+    
+	ntheta = design.cols();
+	nsims = design.rows();
+	noutput = ysim.rows();
+	numPC = GPpred.lambdas.cols();
+	
+	return GPpred;
+}
+
+// Initializes the prediction design
+void emulator::setupdesignpred(int numreal, VectorXd thetapred)
 {
 	ypred.resize(noutput, numreal);
 	ypred.setZero();
-	MatrixXd display(otherdesign.rows(), otherdesign.cols() + 1);
 	int i;
-	for (i = 0; i < otherdesign.rows(); i++)
-	{
-		display(i,0) = i + 1;
-	}
-	display.block(0,1, otherdesign.rows(), otherdesign.cols()) = otherdesign;
-	cout << "\nSimulation design for validation data (runs not included in training set): \n" << display << endl;
-	cout << "Please select from the above the parameter setting you'd like "; 
-	cout << "to use for the prediction by typing the corresponding number in the leftmost column. ";
-	cout << "OR type 0 if you would like to use a new set of parameters not included in the list above.\n";
-	cin >> truepoint;
-	
-	while (truepoint < 0 || truepoint > otherdesign.rows())
-	{
- 		cout << "The choice you selected is invalid. Please select again." << endl;
-		cin >> truepoint;
-	}
-	
-	RowVectorXd thetapred(ntheta);
-	if(truepoint == 0)
-	{
-		cout << "\nPlease type the parameter settings you'd like to use, pressing 'SPACE' after each number.\n";
-		for (i = 0; i < ntheta; i++)
-		{
-			cin >> thetapred(i);
-		}
-		cout << "Emulator will make prediction for input settings: " << thetapred << endl;
-		truepoint--;
-	}
-	
-	if (truepoint > 0)
-	{
-		truepoint--;
-		thetapred = otherdesign.row(truepoint);
-	
-		cout << endl << "You chose the setting: " << thetapred << endl;
-		cout << "\nThis parameter setting corresponds to the actual simulation output:\n" << otherysim.col(truepoint) << endl;
-	}
 	
 	/**** standardize the prediction points ****/
 	RowVectorXd thetapred_std(ntheta);
@@ -665,21 +644,19 @@ void emulator::setupdesignpred(int numreal)
 	designpred << std_design(), thetapred_std;
 }
 
-void emulator::predGP(GPdat GPpred, int k)
+// make prediction using kth set of fit parameters. predicted output becomes the kth column of ypred
+void emulator::predGP(GPdat GPpred, int k = 1)
 {
 	RowVectorXd lamws(GPpred.lambdas.cols());
 	RowVectorXd rhows(GPpred.rhos.cols());
 	
-	// float lameta = GPpred.lambdas(k);	
-	lamws.noalias() = GPpred.lambdas.row(k);
-	rhows.noalias() = GPpred.rhos.row(k);
+	lamws = GPpred.lambdas.row(k);
+	rhows = GPpred.rhos.row(k);
 	
 	/******** now build the covariance matrix and take submatrices **********/
 	MatrixXd sigmapred(designpred.rows() * numPC, designpred.rows() * numPC);
 	sigmapred.setZero();
 	sigmapred = makesigmaw(designpred, lamws, rhows); 	// This has all the principal components sigmas on the diagonal
-	
-	// cout << "Sigmapred is: \n" << sigmapred << endl;
 	
 	RowVectorXd wpred(numPC);
 	int nsims_pred = designpred.rows();
@@ -687,7 +664,6 @@ void emulator::predGP(GPdat GPpred, int k)
 	MatrixXd sigtmp(sigmapred.rows(), sigmapred.cols());
 	MatrixXd sig11(nsims, nsims);
 	MatrixXd sig21(nsims_pred - nsims, nsims);
-	// float temp;
 	MatrixXd tempmat(1,1);
 	for (p = 0; p < numPC; p++)
 	{
@@ -697,8 +673,6 @@ void emulator::predGP(GPdat GPpred, int k)
 		tempmat.noalias() = sig21 * invert(sig11) * what.segment(p * nsims, nsims);	
 		wpred(p) = tempmat(0,0);
 	}
-	
-	// cout << "wpred is: \n" << wpred << endl;
 	
 	/************** Make prediction *************/
 	
@@ -710,144 +684,58 @@ void emulator::predGP(GPdat GPpred, int k)
 	
 	// Now on native scale
 	ypred.col(k) = ypred.col(k) * ysimsd + ysimmean;
-	 
 }
 
-void emulator::savepred()
+// average each row of ypred to get the mean predicted output
+VectorXd emulator::averagepreds()
 {
-	cout << endl << "ypred is: \n" << ypred << endl;
-	VectorXd ypredmean(noutput);
-	ypredmean = ypred.rowwise().mean();
-	cout << endl << "ypred mean is: \n" << ypredmean << endl;
-		
-	ofstream myfile;
-	char filename[255];
+	VectorXd meanpred(ypred.rows());
 	
-	cout << "\nSaving ypred. What would you like to name the file?" << endl;
-	cin >> filename;
+	meanpred = ypred.rowwise().mean();
 	
+	return meanpred;
+}
+
+// returns ypred -- the matrix of predictions made using different sets of fit parameters.
+MatrixXd emulator::getypred()
+{
+	return ypred;
+}
+
+// Reads data from file into a matrix. First number of file = # of rows, second number of file = # of columns
+MatrixXd ReadInMatrix(char* filename)
+{
+	ifstream matrixfile;
+	matrixfile.open(filename);
+	
+	if(matrixfile.fail())
+	{
+		cout << endl << "Can't open file: " << filename << endl;
+		exit(1);	
+	}
+	
+	int nrows, ncols;
+	
+	// read in the number of rows and number of columns
+	matrixfile >> nrows >> ncols;
+	
+	//	read into matrix M
+	float x;
+	MatrixXd M(nrows,ncols);
 	int i, j;
-	
-	//	Calculate the mean sim output and its std deviation
-	VectorXd ysimstddev(noutput);
-	MatrixXd diff_from_mean(noutput, nsims);
+	for (i = 0; i < nrows; i++)
+	{
+		for (j = 0; j < ncols; j++)
+		{
+			matrixfile >> x;
+			M(i,j) = x;
+		}	
+	}
+	matrixfile.close();
 
-	for (i = 0; i < ysim.rows(); i++)
-	{
-		for (j = 0; j < ysim.cols(); j++)
-		{
-			diff_from_mean(i, j) = pow(ysim(i, j) - ysimmean(i),2);
-		}
-	}
-	
-	ysimstddev = diff_from_mean.rowwise().mean();
-	for (i = 0; i < ysimstddev.size(); i++)
-	{
-		ysimstddev(i) = sqrt(ysimstddev(i));
-	}
-	
-	myfile.open (filename);	
-	
-	// Store all data in file
-	myfile << "#xvar\t" << "#ysim mean\t" << "#stddev\t" << "#actual output\t" << "#pred output\n";		// column headings
-	for (i = 0; i < ypred.rows(); i++)
-	{
-		j = 0;
-		myfile << xvar(i) << "\t";
-		myfile << ysimmean(i) << "\t" << ysimstddev(i) << "\t" << ypred(i,j);
-		if (ypred.cols() > 1)
-		{
-			for (j = 1; j < ypred.cols(); j++)
-			{
-				myfile << "\t" << ypred(i,j);
-			}
-		}
-		if(truepoint >= 0)
-		{
-			myfile << "\t" << otherysim(i,truepoint);
-		}
-		myfile << endl;
-	}
-	myfile.close();
+	return M;
 }
 
-int main()
-{
-	char sim_out[255], sim_in[255], x_var[255];
-	int discard, num_PC, iter;
-	emulator data;
-	GPdat GPfit;
-	GPdat GPpred;
-
-	cout << "\nType file name for simulation output.\nFile format: \n";
-	cout << "First two numbers specify row, column size. Then the matrix is output of each simulation x number of simulations.\n";
-    cin >> sim_out;
-    cout << "\nType file name for simulation design (# of simulations x # of paramaters).\n";
-    cout << "Again, first two numbers specify row and column size.\n";
-    cin >> sim_in;
-    cout << "\nType file name for independent variable array. \nFirst number specifies length of array.\n";
-    cin >> x_var;
-    
-    //	Read above files into ysim, design, and xvar
-    data.readin(sim_out, sim_in, x_var);
-    
-    
-    cout << "Number of simulation runs to ignore: \n";
-    cin >> discard;
-
-    data.setup(discard);
-    
-    cout << "Number of principal components: \n";
-    cin >> num_PC;
-
-	iter = 20;
-	
-	data.GPsetup(num_PC);
-	
-	GPfit = data.fitGP(iter);
-	
-	// cout << "lam_eta fit is: \n" << GPfit.lam_eta << endl;
-	// cout << "lambdas fit is: \n" << GPfit.lambdas << endl;
-	// cout << "rhos fit is: \n" << GPfit.rhos << endl;
-	
-	/***** make predictions *****/
-	int burnin = 19;
-	int interval = 2;
-	int i;
-	
-	int numreal = ((iter - burnin) / interval) + 1;
-	// cout << "numreal is: " << numreal << endl;
-	GPpred.lam_eta.resize(numreal);
-	GPpred.lambdas.resize(numreal, GPfit.lambdas.cols());
-	GPpred.rhos.resize(numreal, GPfit.rhos.cols());
-	
-	for (i = 0; i < numreal ; i++)
-	{
-		GPpred.lam_eta(i) = GPfit.lam_eta((burnin - 1) + interval * i);
-		GPpred.lambdas.row(i) = GPfit.lambdas.row((burnin - 1) + interval * i);
-		GPpred.rhos.row(i) = GPfit.rhos.row((burnin - 1) + interval * i);
-	}
-	// cout << "lam_eta pred is: \n" << GPpred.lam_eta << endl;
-	// cout << "lambdas pred is: \n" << GPpred.lambdas << endl;
-	// cout << "rhos pred is: \n" << GPpred.rhos << endl;
-	int predictagain = 1;
-	while(predictagain)
-	{
-		predictagain = 1;
-		data.setupdesignpred(numreal);
-		for (i = 0; i < numreal; i++)
-		{
-			data.predGP(GPpred, i);
-		}
-		data.savepred();
-		
-		cout << "\nWould you like to make another prediction using a different set of parameters? (No = 0; Yes = 1)" << endl;
-		cin >> predictagain;		
-	}
-	
-	
-	return 1;
-}
 
 //	Sort columns of matrix based on values in bottom row
 MatrixXd SortByCol(MatrixXd num)
@@ -949,12 +837,3 @@ MatrixXd invert(MatrixXd A)
 	
 	return invA;
 }
-
-// float getRandnum(default_random_engine rd, float min, float max)
-// {
-//   // unsigned seed = std::chrono::system_clock::now().time_since_epoch().count();
-// 	//default_random_engine rd(43);
-// 	uniform_real_distribution<float> distribution(min,max);
-// 
-// 	return distribution(rd);
-// }
